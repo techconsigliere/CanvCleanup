@@ -32,6 +32,7 @@
   const TOOL_ID = 'cfc-file-cleanup';
   if (window.__cfcCleanupAbort) window.__cfcCleanupAbort.stop = true;
   const abortRef = (window.__cfcCleanupAbort = { stop: false });
+  document.querySelectorAll('[data-cfc-bg]').forEach((n) => { n.removeAttribute('aria-hidden'); n.removeAttribute('data-cfc-bg'); });
   document.getElementById(TOOL_ID)?.remove();
   document.getElementById(TOOL_ID + '-style')?.remove();
 
@@ -91,7 +92,8 @@
     return c ? decodeURIComponent(c.slice('_csrf_token='.length)) : '';
   };
 
-  const api = async (pathOrUrl, opts = {}) => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const api = async (pathOrUrl, opts = {}, attempt = 0) => {
     const url = pathOrUrl.startsWith('http') ? pathOrUrl : origin + pathOrUrl;
     const res = await fetch(url, {
       credentials: 'same-origin',
@@ -99,8 +101,20 @@
       headers: { Accept: 'application/json', 'X-CSRF-Token': csrfToken(), ...(opts.headers || {}) },
     });
     if (!res.ok) {
+      // Canvas throttles with 429, or 403 + "Rate Limit Exceeded". Back off and
+      // retry those and 5xx, but never a genuine permission/Blueprint 403.
+      let rateLimited = res.status === 429;
+      if (res.status === 403) {
+        const body = await res.clone().text().catch(() => '');
+        rateLimited = /rate limit/i.test(body);
+      }
+      if ((rateLimited || res.status >= 500) && attempt < 3) {
+        await sleep(600 * Math.pow(2, attempt));
+        return api(pathOrUrl, opts, attempt + 1);
+      }
       const err = new Error(`HTTP ${res.status}`);
       err.status = res.status;
+      err.rateLimited = rateLimited;
       throw err;
     }
     return res;
@@ -119,7 +133,9 @@
     let url = path;
     while (url) {
       const res = await api(url);
-      const data = await res.json();
+      let data;
+      try { data = await res.json(); }
+      catch (e) { throw new Error('Canvas returned an unexpected response (you may have been signed out). Reload Canvas and try again.'); }
       out.push(...(Array.isArray(data) ? data : [data]));
       url = nextLink(res.headers.get('Link'));
     }
@@ -176,7 +192,7 @@ ${R}{--cfc-dark:#003F87;--cfc-dark-2:#002F66;--cfc-blue:#007AC8;--cfc-tint:#E8F2
 --cfc-green:#BAD80A;--cfc-dgreen:#006B3F;--cfc-yellow:#FFC61E;--cfc-red:#CC2D30;--cfc-red-2:#A82326;
 --cfc-black:#1C2023;--cfc-gray:#667986;--cfc-gray-dk:#55656F;--cfc-line:#D8E0E6;
 --cfc-font:"Fira Sans",system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
-position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;padding:2rem 1rem;
+position:fixed;inset:0;top:0;left:0;right:0;bottom:0;z-index:100000;display:flex;align-items:center;justify-content:center;padding:2rem 1rem;
 background:rgba(0,31,67,.62);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}
 ${R},${R} *,${R} *::before,${R} *::after{box-sizing:border-box;font-family:var(--cfc-font)}
 ${R} h2,${R} h3,${R} p,${R} ul,${R} table{margin:0;padding:0}
@@ -215,12 +231,12 @@ ${R} .cfc-spin{width:1.4rem;height:1.4rem;border-radius:50%;border:3px solid var
 ${R} .cfc-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.75rem}
 ${R} .cfc-stat{border:1px solid var(--cfc-line);border-top:4px solid var(--cfc-dark);border-radius:10px;padding:.8rem 1rem;background:#fff}
 ${R} .cfc-stat b{display:block;font-size:1.75rem;font-weight:700;line-height:1.1;color:var(--cfc-dark)}
-${R} .cfc-stat span{font-size:.78rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--cfc-gray)}
+${R} .cfc-stat span{font-size:.78rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--cfc-gray-dk)}
 ${R} .cfc-stat.is-blue{border-top-color:var(--cfc-blue)}
 ${R} .cfc-stat.is-gray{border-top-color:var(--cfc-gray)}
 ${R} .cfc-stat.is-yellow{border-top-color:var(--cfc-yellow)}
 ${R} .cfc-stat.is-green{border-top-color:var(--cfc-dgreen)}
-${R} .cfc-note{display:flex;gap:.5rem;align-items:flex-start;margin-top:.9rem;font-size:.88rem;line-height:1.45;color:var(--cfc-gray)}
+${R} .cfc-note{display:flex;gap:.5rem;align-items:flex-start;margin-top:.9rem;font-size:.88rem;line-height:1.45;color:var(--cfc-gray-dk)}
 ${R} .cfc-note svg{flex:none;margin-top:.1rem;color:var(--cfc-blue)}
 
 ${R} .cfc-banner{display:flex;gap:.75rem;align-items:flex-start;margin-bottom:1rem;padding:.9rem 1rem;border-radius:10px;
@@ -241,10 +257,12 @@ ${R} .cfc-seg label:first-child{border-left:0}
 ${R} .cfc-seg label:hover{background:var(--cfc-tint)}
 ${R} .cfc-seg input{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
 ${R} .cfc-seg label:has(input:checked){background:var(--cfc-dark);color:#fff}
+${R} .cfc-seg label.is-active{background:var(--cfc-dark);color:#fff}
 ${R} .cfc-seg label:has(input:focus-visible){outline:3px solid var(--cfc-dark);outline-offset:-3px}
 ${R} .cfc-seg label:has(input:checked):has(input:focus-visible){outline-color:#fff}
 ${R} .cfc-n{font-size:.75rem;font-weight:600;padding:0 .45rem;border-radius:999px;background:var(--cfc-tint);color:var(--cfc-dark)}
 ${R} .cfc-seg label:has(input:checked) .cfc-n{background:#fff;color:var(--cfc-dark)}
+${R} .cfc-seg label.is-active .cfc-n{background:#fff;color:var(--cfc-dark)}
 ${R} .cfc-empty{margin-top:1rem;padding:1.5rem;text-align:center;color:var(--cfc-gray-dk);border:1px dashed var(--cfc-line);border-radius:12px}
 ${R} .cfc-toolbar .cfc-spacer{flex:1}
 ${R} .cfc-btn{display:inline-flex;align-items:center;gap:.4rem;padding:.45rem 1rem;border-radius:999px;border:1.5px solid var(--cfc-blue);
@@ -266,12 +284,13 @@ ${R} .cfc-scroll{overflow-x:auto}
 
 ${R} table{width:100%;min-width:780px;border-collapse:collapse;table-layout:fixed;font-size:.9rem}
 ${R} th{padding:.55rem .75rem;text-align:left;font-size:.72rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
-color:var(--cfc-gray);background:#fff;border-bottom:2px solid var(--cfc-line);white-space:nowrap}
+color:var(--cfc-gray-dk);background:#fff;border-bottom:2px solid var(--cfc-line);white-space:nowrap}
 ${R} td{padding:.6rem .75rem;border-bottom:1px solid #EDF1F4;vertical-align:top;line-height:1.4}
 ${R} tbody tr:last-child td{border-bottom:0}
 ${R} tbody tr{transition:background .12s}
 ${R} tbody tr:hover{background:var(--cfc-tint-2)}
 ${R} tbody tr:has(input:checked){background:var(--cfc-tint);box-shadow:inset 4px 0 0 var(--cfc-blue)}
+${R} tbody tr.is-sel{background:var(--cfc-tint);box-shadow:inset 4px 0 0 var(--cfc-blue)}
 ${R} .cfc-cb{width:2.6rem}
 ${R} input[type=checkbox]:not([role]){width:1.15rem;height:1.15rem;margin:0;accent-color:var(--cfc-blue);cursor:pointer;vertical-align:middle}
 ${R} .cfc-file{display:flex;gap:.65rem;align-items:flex-start}
@@ -313,7 +332,7 @@ ${R} .cfc-undo svg{flex:none;margin-top:.1rem;color:var(--cfc-dgreen)}
 ${R} .cfc-progress{height:6px;margin-top:.65rem;border-radius:999px;background:var(--cfc-tint);overflow:hidden}
 ${R} .cfc-progress span{display:block;height:100%;width:0;background:var(--cfc-blue);transition:width .2s}
 
-${R} .cfc-confirm-wrap{position:absolute;inset:0;z-index:2;display:flex;align-items:center;justify-content:center;padding:1rem;background:rgba(0,31,67,.5)}
+${R} .cfc-confirm-wrap{position:absolute;inset:0;top:0;left:0;right:0;bottom:0;z-index:2;display:flex;align-items:center;justify-content:center;padding:1rem;background:rgba(0,31,67,.5)}
 ${R} .cfc-confirm{width:min(560px,100%);max-height:85%;overflow:auto;background:#fff;border-radius:12px;border-top:6px solid var(--cfc-red);
 box-shadow:0 18px 48px rgba(0,25,55,.4);padding:1.3rem 1.4rem;animation:cfc-in .18s ease-out}
 ${R} .cfc-confirm h3{display:flex;align-items:center;gap:.55rem;font-size:1.25rem;font-weight:600;color:var(--cfc-black)}
@@ -334,7 +353,7 @@ ${R} .cfc-confirm-btns .cfc-danger{margin-left:0}
   ${R} .cfc-dialog{max-height:100vh;height:100%;border-radius:0}
 }
 @media (prefers-reduced-motion:reduce){
-  ${R} *,${R} *::before{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+  ${R} *,${R} *::before,${R} *::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
 }
 `;
   document.head.append(el('style', { id: TOOL_ID + '-style' }, css));
@@ -359,11 +378,15 @@ ${R} .cfc-confirm-btns .cfc-danger{margin-left:0}
 
   let confirmOpen = null; // { box, cancel } while the delete confirmation is showing
   let busy = false;
+  let hiddenSiblings = [];
   const close = () => {
     if (busy && !window.confirm('Files are still being deleted. Close anyway? Deletion will stop partway.')) return;
     abortRef.stop = true;
+    for (const node of hiddenSiblings) { node.removeAttribute('aria-hidden'); node.removeAttribute('data-cfc-bg'); }
+    hiddenSiblings = [];
     overlay.remove();
     document.getElementById(TOOL_ID + '-style')?.remove();
+    document.getElementById(TOOL_ID + '-font')?.remove();
   };
   closeBtn.addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
@@ -392,6 +415,13 @@ ${R} .cfc-confirm-btns .cfc-danger{margin-left:0}
   });
 
   document.body.append(overlay);
+  for (const node of [...document.body.children]) {
+    if (node !== overlay && node.getAttribute('aria-hidden') !== 'true') {
+      node.setAttribute('aria-hidden', 'true');
+      node.setAttribute('data-cfc-bg', '');
+      hiddenSiblings.push(node);
+    }
+  }
   heading.focus();
 
   const loadingText = el('span', {}, 'Loading course files…');
@@ -491,8 +521,11 @@ ${R} .cfc-confirm-btns .cfc-danger{margin-left:0}
   ];
 
   loadingText.textContent = `Found ${plural(files.length, 'file')}. Checking where they’re linked in your course…`;
+  let scanDone = 0;
   await pool(scans, CONCURRENCY, async ([name, fn]) => {
     try { await fn(); } catch { notChecked.push(name); }
+    scanDone++;
+    loadingText.textContent = `Found ${plural(files.length, 'file')}. Checking links, ${scanDone} of ${scans.length} areas done.`;
   });
 
   // ---- Detect duplicates ---------------------------------------------------
@@ -578,16 +611,27 @@ ${R} .cfc-confirm-btns .cfc-danger{margin-left:0}
 
   const deleteBtn = el('button', { class: 'cfc-danger', type: 'button', disabled: true }, icon('trash', 18), el('span', {}, 'Delete files'));
   const selInfo = el('div', { class: 'cfc-selinfo', 'aria-live': 'polite' }, 'No files selected');
+  // A row is hidden by a filter (cfc-hidden) or a collapsed folder (is-collapsed);
+  // check classes rather than getClientRects, which forces a layout reflow per call.
+  const rowHidden = (tr) => !tr || tr.classList.contains('cfc-hidden') ||
+    (tr.closest('.cfc-card') && tr.closest('.cfc-card').classList.contains('is-collapsed'));
   const updateSelection = () => {
-    const ids = [...checkboxes].filter(([, cb]) => cb.checked && !cb.disabled).map(([id]) => id);
-    const bytes = ids.reduce((t, id) => t + (byId.get(id).size || 0), 0);
-    deleteBtn.disabled = busy || ids.length === 0;
-    deleteBtn.lastChild.textContent = ids.length ? `Delete ${plural(ids.length, 'file')}` : 'Delete files';
-    // Files stay selected when a filter or a collapsed folder hides them, so
-    // say so; otherwise a teacher could delete files they can no longer see.
-    const unseen = ids.filter((id) => rows.get(id)?.getClientRects().length === 0).length;
-    selInfo.replaceChildren(ids.length
-      ? el('span', {}, el('b', {}, plural(ids.length, 'file')), ` selected · ${fmtSize(bytes)}`,
+    let count = 0, bytes = 0, unseen = 0;
+    for (const [id, cb] of checkboxes) {
+      const tr = rows.get(id);
+      if (tr) tr.classList.toggle('is-sel', cb.checked);
+      if (cb.checked && !cb.disabled) { count++; bytes += byId.get(id).size || 0; if (rowHidden(tr)) unseen++; }
+    }
+    deleteBtn.disabled = busy || count === 0;
+    deleteBtn.lastChild.textContent = count ? `Delete ${plural(count, 'file')}` : 'Delete files';
+    for (const c of cards) {
+      const boxes = [...c.querySelectorAll('tbody input[type=checkbox]')].filter((b) => !b.disabled);
+      const on = boxes.filter((b) => b.checked).length;
+      c._allCb.indeterminate = on > 0 && on < boxes.length;
+      c._allCb.checked = boxes.length > 0 && on === boxes.length;
+    }
+    selInfo.replaceChildren(count
+      ? el('span', {}, el('b', {}, plural(count, 'file')), ` selected · ${fmtSize(bytes)}`,
         unseen > 0 && el('span', {}, ` · ${unseen} not currently shown`))
       : 'No files selected');
   };
@@ -744,8 +788,14 @@ ${R} .cfc-confirm-btns .cfc-danger{margin-left:0}
     el('div', { class: 'cfc-seg' }, FILTERS.map(([value, text, n]) => {
       const radio = el('input', { type: 'radio', name: 'cfc-filter', value });
       radio.checked = value === 'all';
-      radio.addEventListener('change', () => radio.checked && applyFilter(value));
-      return el('label', {}, radio, text, el('span', { class: 'cfc-n' }, String(n)));
+      const lab = el('label', { class: value === 'all' ? 'is-active' : '' }, radio, text, el('span', { class: 'cfc-n' }, String(n)));
+      radio.addEventListener('change', () => {
+        if (!radio.checked) return;
+        for (const sib of lab.parentNode.children) sib.classList.remove('is-active');
+        lab.classList.add('is-active');
+        applyFilter(value);
+      });
+      return lab;
     })));
 
   const banner = el('div', { role: 'status', 'aria-live': 'polite' });
@@ -769,7 +819,7 @@ ${R} .cfc-confirm-btns .cfc-danger{margin-left:0}
   selectShownBtn.addEventListener('click', () => {
     let n = 0;
     for (const [id, cb] of checkboxes) {
-      if (cb.disabled || cb.checked || rows.get(id).getClientRects().length === 0) continue;
+      if (cb.disabled || cb.checked || rowHidden(rows.get(id))) continue;
       cb.checked = true;
       n++;
     }
@@ -848,6 +898,11 @@ ${R} .cfc-confirm-btns .cfc-danger{margin-left:0}
   deleteBtn.addEventListener('click', async () => {
     const ids = [...checkboxes].filter(([, cb]) => cb.checked && !cb.disabled).map(([id]) => id);
     if (!ids.length || !(await confirmDelete(ids))) return;
+    if (!csrfToken()) {
+      showBanner('warn', 'warn', el('strong', {}, 'Could not verify your Canvas session.'),
+        ' Reload the Canvas page and try again.');
+      return;
+    }
 
     busy = true;
     updateSelection();
@@ -871,9 +926,11 @@ ${R} .cfc-confirm-btns .cfc-danger{margin-left:0}
         tr.classList.add('cfc-deleted');
         tr._status.replaceChildren(el('span', { class: 'cfc-pill is-del' }, 'Deleted'));
       } catch (e) {
-        const why = e.status === 401 || e.status === 403
-          ? 'not allowed (it may be locked by a Blueprint course)'
-          : e.message;
+        const why = e.rateLimited
+          ? 'Canvas is rate-limiting right now; wait a moment and retry'
+          : (e.status === 401 || e.status === 403)
+            ? 'not allowed (Blueprint-locked, or your role lacks permission)'
+            : e.message;
         failures.push(`${byId.get(id).display_name}: ${why}`);
       }
       done++;
@@ -881,6 +938,7 @@ ${R} .cfc-confirm-btns .cfc-danger{margin-left:0}
       bar.style.width = `${pct}%`;
       progress.setAttribute('aria-valuenow', String(pct));
       deleteBtn.lastChild.textContent = `Deleting ${done} of ${ids.length}…`;
+      selInfo.textContent = `Deleting ${done} of ${ids.length}…`;
     });
 
     busy = false;
