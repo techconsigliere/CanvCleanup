@@ -11,7 +11,7 @@
  *
  * Runs in the teacher's own browser session with their own Canvas
  * permissions. No tokens, nothing stored. The only request outside Canvas is
- * the optional brand-font stylesheet from Google Fonts (LOAD_BRAND_FONT).
+ * the brand font, served from the tool's own GitHub Pages site (LOAD_BRAND_FONT).
  */
 (async () => {
   'use strict';
@@ -21,7 +21,7 @@
   // WWU-maintained explainer. Leave '' to hide the link.
   const HELP_URL = '';
   const HELP_LABEL = 'Learn more about restoring deleted items';
-  // Loads Fira Sans (WWU's official sans-serif) from Google Fonts. If set to
+  // Loads Fira Sans (WWU's official sans-serif) from this tool's own GitHub Pages. If set to
   // false, or if Canvas's Content Security Policy blocks it, the tool falls
   // back to the system font and still works.
   const LOAD_BRAND_FONT = true;
@@ -161,10 +161,12 @@
   // --cfc-gray-dk is a shade of brand gray used for small text on tinted
   // backgrounds, where brand gray falls just under WCAG AA 4.5:1.
   if (LOAD_BRAND_FONT && !document.getElementById(TOOL_ID + '-font')) {
-    document.head.append(el('link', {
-      id: TOOL_ID + '-font', rel: 'stylesheet',
-      href: 'https://fonts.googleapis.com/css2?family=Fira+Sans:wght@400;500;600;700&display=swap',
-    }));
+    var FB = 'https://techconsigliere.github.io/CanvCleanup/fonts/';
+    document.head.append(el('style', { id: TOOL_ID + '-font' },
+      '@font-face{font-family:"Fira Sans";font-weight:400;font-display:swap;src:url("' + FB + 'FiraSans-Regular.woff") format("woff")}' +
+      '@font-face{font-family:"Fira Sans";font-weight:500;font-display:swap;src:url("' + FB + 'FiraSans-Medium.woff") format("woff")}' +
+      '@font-face{font-family:"Fira Sans";font-weight:600;font-display:swap;src:url("' + FB + 'FiraSans-SemiBold.woff") format("woff")}' +
+      '@font-face{font-family:"Fira Sans";font-weight:700;font-display:swap;src:url("' + FB + 'FiraSans-Bold.woff") format("woff")}'));
   }
   const R = `#${TOOL_ID}`;
   const css = `
