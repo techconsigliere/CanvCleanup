@@ -30,6 +30,8 @@
   const CONCURRENCY = 4;
 
   const TOOL_ID = 'cfc-file-cleanup';
+  if (window.__cfcCleanupAbort) window.__cfcCleanupAbort.stop = true;
+  const abortRef = (window.__cfcCleanupAbort = { stop: false });
   document.getElementById(TOOL_ID)?.remove();
   document.getElementById(TOOL_ID + '-style')?.remove();
 
@@ -179,7 +181,7 @@ background:rgba(0,31,67,.62);backdrop-filter:blur(3px);-webkit-backdrop-filter:b
 ${R},${R} *,${R} *::before,${R} *::after{box-sizing:border-box;font-family:var(--cfc-font)}
 ${R} h2,${R} h3,${R} p,${R} ul,${R} table{margin:0;padding:0}
 ${R} code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em;background:var(--cfc-tint);color:var(--cfc-dark);padding:.1rem .35rem;border-radius:4px}
-${R} a{color:var(--cfc-blue);text-decoration:underline;text-underline-offset:2px}
+${R} a{color:var(--cfc-dark);text-decoration:underline;text-underline-offset:2px}
 ${R} a:hover{color:var(--cfc-dark)}
 ${R} :focus-visible{outline:3px solid var(--cfc-blue);outline-offset:2px;border-radius:4px}
 ${R} [tabindex="-1"]:focus{outline:none}
@@ -239,7 +241,8 @@ ${R} .cfc-seg label:first-child{border-left:0}
 ${R} .cfc-seg label:hover{background:var(--cfc-tint)}
 ${R} .cfc-seg input{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
 ${R} .cfc-seg label:has(input:checked){background:var(--cfc-dark);color:#fff}
-${R} .cfc-seg label:has(input:focus-visible){outline:3px solid var(--cfc-green);outline-offset:-3px}
+${R} .cfc-seg label:has(input:focus-visible){outline:3px solid var(--cfc-dark);outline-offset:-3px}
+${R} .cfc-seg label:has(input:checked):has(input:focus-visible){outline-color:#fff}
 ${R} .cfc-n{font-size:.75rem;font-weight:600;padding:0 .45rem;border-radius:999px;background:var(--cfc-tint);color:var(--cfc-dark)}
 ${R} .cfc-seg label:has(input:checked) .cfc-n{background:#fff;color:var(--cfc-dark)}
 ${R} .cfc-empty{margin-top:1rem;padding:1.5rem;text-align:center;color:var(--cfc-gray-dk);border:1px dashed var(--cfc-line);border-radius:12px}
@@ -358,6 +361,7 @@ ${R} .cfc-confirm-btns .cfc-danger{margin-left:0}
   let busy = false;
   const close = () => {
     if (busy && !window.confirm('Files are still being deleted. Close anyway? Deletion will stop partway.')) return;
+    abortRef.stop = true;
     overlay.remove();
     document.getElementById(TOOL_ID + '-style')?.remove();
   };
@@ -382,6 +386,7 @@ ${R} .cfc-confirm-btns .cfc-danger{margin-left:0}
     if (!focusables.length) return;
     const first = focusables[0];
     const last = focusables[focusables.length - 1];
+    if (!focusables.includes(document.activeElement)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); return; }
     if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   });
@@ -445,12 +450,16 @@ ${R} .cfc-confirm-btns .cfc-danger{margin-left:0}
         recordLinks(a.description, `Assignment: ${a.name}`);
     }],
     ['discussions', async () => {
-      for (const d of await getAll(`/api/v1/courses/${courseId}/discussion_topics?per_page=100`))
+      for (const d of await getAll(`/api/v1/courses/${courseId}/discussion_topics?per_page=100`)) {
         recordLinks(d.message, `Discussion: ${d.title}`);
+        if (d.attachments) recordLinks(JSON.stringify(d.attachments), `Discussion: ${d.title}`);
+      }
     }],
     ['announcements', async () => {
-      for (const d of await getAll(`/api/v1/courses/${courseId}/discussion_topics?only_announcements=true&per_page=100`))
+      for (const d of await getAll(`/api/v1/courses/${courseId}/discussion_topics?only_announcements=true&per_page=100`)) {
         recordLinks(d.message, `Announcement: ${d.title}`);
+        if (d.attachments) recordLinks(JSON.stringify(d.attachments), `Announcement: ${d.title}`);
+      }
     }],
     ['quizzes', async () => {
       const quizzes = await getAll(`/api/v1/courses/${courseId}/quizzes?per_page=100`);
@@ -775,6 +784,11 @@ ${R} .cfc-confirm-btns .cfc-danger{margin-left:0}
     canDelete && selectShownBtn,
     dupSets.length > 0 && canDelete && (dupBtn = el('button', { type: 'button', class: 'cfc-btn', onclick: selectOlderDups }, icon('copy', 16), 'Select older duplicate copies')),
     canDelete && el('button', { type: 'button', class: 'cfc-btn', onclick: clearAll }, 'Clear selection'));
+  if (notChecked.length) {
+    var cfcSelWarn = 'Some links could not be checked this run, so one-click selection is turned off to avoid auto-selecting a file that is actually in use. Select files manually.';
+    if (dupBtn) { dupBtn.disabled = true; dupBtn.title = cfcSelWarn; }
+    selectShownBtn.disabled = true; selectShownBtn.title = cfcSelWarn;
+  }
 
   const recover = el('section', { class: 'cfc-recover', id: 'cfc-recover', 'aria-labelledby': 'cfc-recover-h' },
     icon('restore', 26),
@@ -844,6 +858,7 @@ ${R} .cfc-confirm-btns .cfc-danger{margin-left:0}
     deleteBtn.lastChild.textContent = `Deleting 0 of ${ids.length}…`;
 
     await pool(ids, 3, async (id) => {
+      if (abortRef.stop) return;
       try {
         // Plain DELETE = soft delete, restorable from /undelete.
         // Never add ?replace=true: that permanently overwrites the file's
@@ -881,5 +896,6 @@ ${R} .cfc-confirm-btns .cfc-danger{margin-left:0}
     }
     body.scrollTop = 0;
     updateSelection();
+    try { banner.setAttribute('tabindex', '-1'); banner.focus(); } catch (e) {}
   });
 })();
