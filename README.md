@@ -2,7 +2,7 @@
 
 A teacher-facing bookmarklet that lists every file in a Canvas course by folder, flags likely duplicates and files that are still linked in your content, and lets you soft-delete the ones you no longer need. The point is reclaiming course storage quota and keeping the files you actually use easy to find.
 
-**Install page:** https://techconsigliere.github.io/CanvCleanup/teacher/install-filecleanup.html
+**Install page:** https://techconsigliere.github.io/CanvCleanup/
 
 It runs entirely in your own browser, in your own Canvas session, with your own permissions. No account, no access token, nothing stored. Deletes are soft deletes, restorable from Canvas's own Restore Deleted Items (`/undelete`) page.
 
